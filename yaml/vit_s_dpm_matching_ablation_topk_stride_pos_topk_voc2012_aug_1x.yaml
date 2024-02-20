@@ -1,0 +1,96 @@
+description: train_mae_mmdet
+
+target:
+  service: sing
+  name: msroctovc
+
+code:
+  local_dir: $CONFIG_DIR/../
+
+environment:
+  image: hangbo/pytorch:1.7.1-apex
+  registry: docker.io
+  setup:
+  - nvcc -V
+  - df -h
+  - ls
+  - sudo apt update
+  - sudo apt install -y git libgl1 libglib2.0-dev 
+  - pip list | grep torch 
+  - cp /mnt/zliang/VOC2012_inst_seg.zip /tmp/
+  - cd /tmp
+  - unzip -q VOC2012_inst_seg.zip
+
+storage:
+  zliang:
+    storage_account_name: resrchvc4data
+    container_name: v-zpeng
+
+search:
+  job_template:
+    name: dpm_sep_ce_loss_05_attn_plus_top_{pos_topk}_stride_{pos_stride}_parts_5_dw_1
+    sku: NDv2g1:G8-V100
+    sla_tier: Premium
+    priority: High
+    process_count_per_node: 1
+    command: 
+      - pip install mmcv-full==1.4.0 --no-cache-dir
+      - cd Connected_components_PyTorch 
+      - python setup.py install --user
+      - python setup.py test
+      - cd ..
+      - pip install mlflow
+      - pip install chainercv
+      - pip install timm
+      - pip install scikit-learn
+      - pip install einops
+      - pip install -v -e . 
+      - export MLFLOW_AUTOLOGGING_ENABLED=false
+      - export CONFIG=configs/dpm_psis/attnshift_voc12aug_1x_dpm_matching.py
+      - /bin/bash tools/dist_train.sh  $$CONFIG 8
+        --options 
+          data_root=/tmp/ 
+          model.backbone.init_cfg.checkpoint=/mnt/zliang/gzh/mae_pretrain/mae_vit_small_800e.pth 
+          model.roi_head.bbox_head.init_cfg.checkpoint=/mnt/zliang/gzh/mae_pretrain/mae_vit_small_800e.pth 
+          model.roi_head.mask_head.init_cfg.checkpoint=/mnt/zliang/gzh/mae_pretrain/mae_vit_small_800e.pth 
+          model.keypoint_head.sklearn_matching=False 
+          model.keypoint_head.meanshift_refine_times=5 
+          model.keypoint_head.semantic_deform=False 
+          model.keypoint_head.hidden_channels=256 
+          model.keypoint_head.deformable_cost_weight=1.0 
+          model.keypoint_head.topk_stride={pos_stride} 
+          model.keypoint_head.part_points_topk={pos_topk} 
+          model.keypoint_head.instance_neg_points_topk=0
+          model.keypoint_head.map_thr=0.9 
+          model.keypoint_head.neg_loss_weight=0.00
+          model.keypoint_head.num_classes=21 
+          model.keypoint_head.bce_loss.loss_weight=0.05 
+          model.keypoint_head.bce_loss.use_sigmoid=False 
+          model.keypoint_head.mask_gt_sets=3 
+          model.keypoint_head.num_neg_sample=5 
+          model.keypoint_head.iam_num_points_init_neg=5 
+          model.keypoint_head.iam_num_points_init_pos=5 
+          model.keypoint_head.num_semantic_points=5 
+          model.keypoint_head.num_classifier=5 
+          data.samples_per_gpu=1 
+          data.workers_per_gpu=1 
+          optimizer.lr=0.0001 
+          optimizer_config.update_interval=2 
+        --work-dir /mnt/zliang/gzh/mae-mmdet/dpm_sep_ce_loss_05_attn_plus_top_{pos_topk}_stride_{pos_stride}_parts_5_dw_1
+        --auto-resume 
+
+    submit_args:
+      env:
+        NCCL_DEBUG: INFO
+        MKL_NUM_THREADS: 1
+        OMP_NUM_THREADS: 1
+        MKL_SERVICE_FORCE_INTEL: 1
+  type: grid
+  max_trials: 500
+  params:
+    - name: pos_stride
+      spec: discrete
+      values: [4, 8, 16]
+    - name: pos_topk
+      spec: discrete
+      values: [1, 2, 3, 5, 7, 9]
